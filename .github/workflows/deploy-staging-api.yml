@@ -1,16 +1,15 @@
-name: Deploy api to VPS
+name: Deploy API to Staging
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - 'apps/api/**'
       - 'libs/api-contract/**'
       - 'go.work'
       - 'package-lock.json'
-      - '.github/workflows/deploy-api.yml'
-  workflow_dispatch:
-
+      - '.github/workflows/deploy-staging-api.yml'
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -54,7 +53,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    environment: production
+    environment: staging
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -82,11 +81,11 @@ jobs:
             cd ${{ secrets.VPS_DEPLOY_PATH }}
             git fetch origin main
             git reset --hard origin/main
-            rm -rf apps/api/dist/release
-            mkdir -p apps/api/dist/release
-            tar -xzf /tmp/api-deploy.tar.gz -C apps/api/dist/release
+            rm -rf apps/api/dist/release/staging
+            mkdir -p apps/api/dist/release/staging
+            tar -xzf /tmp/api-deploy.tar.gz -C apps/api/dist/release/staging
             rm -f /tmp/api-deploy.tar.gz
-            cat > apps/api/.env <<'ENV_EOF'
+            cat > apps/api/.env.staging <<'ENV_EOF'
             DB_USERNAME=${{ secrets.DB_USERNAME }}
             DB_PASSWORD=${{ secrets.DB_PASSWORD }}
             DB_NAME=${{ secrets.DB_NAME }}
@@ -108,15 +107,18 @@ jobs:
             CASH_PAYMENT_EXPIRY_SECONDS=${{ secrets.CASH_PAYMENT_EXPIRY_SECONDS }}
             ORDER_PAYMENT_WALLET_ID=${{ secrets.ORDER_PAYMENT_WALLET_ID }}
             ORDER_WEB_BASE_URL=${{ secrets.ORDER_WEB_BASE_URL }}
+            ORDER_PAYMENT_CANCEL_ENABLED=${{ secrets.ORDER_PAYMENT_CANCEL_ENABLED }}
+            ORDER_COD_PAYMENT_ENABLED=${{ secrets.ORDER_COD_PAYMENT_ENABLED }}
             COD_VERIFICATION_EXPIRY_SECONDS=${{ secrets.COD_VERIFICATION_EXPIRY_SECONDS }}
             EXPO_PUSH_ACCESS_TOKEN=${{ secrets.EXPO_PUSH_ACCESS_TOKEN }}
             KDS_PUSH_SOUND=default
             KDS_DISPATCH_INTERVAL_SECONDS=15
             FONNTE_BASE_URL=${{ secrets.FONNTE_BASE_URL }}
             FONNTE_TOKEN=${{ secrets.FONNTE_TOKEN }}
-            APP_ENV=production
+            WHATSAPP_NUMBER_VALIDATION_ENABLED=${{ secrets.WHATSAPP_NUMBER_VALIDATION_ENABLED }}
+            APP_ENV=staging
             ENV_EOF
-            sudo cp apps/api/gatherloop-pos-api.service /etc/systemd/system/
+            sudo cp apps/api/gatherloop-pos-api-staging.service /etc/systemd/system/
             sudo systemctl daemon-reload
-            sudo systemctl enable gatherloop-pos-api
-            sudo systemctl restart gatherloop-pos-api
+            sudo systemctl enable gatherloop-pos-api-staging
+            sudo systemctl restart gatherloop-pos-api-staging
