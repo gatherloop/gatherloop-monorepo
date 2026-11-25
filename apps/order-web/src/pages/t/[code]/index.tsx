@@ -9,7 +9,7 @@ import {
   SESSION_ID_COOKIE_NAME,
   TableNotFoundError,
   toSerializableProps,
-  UrlMenuListQueryRepository,
+  UrlMenuItemQueryRepository,
 } from '@gatherloop-pos/ui';
 import { MenuList, MenuListProps } from '@gatherloop-pos/ui/order';
 import { QueryClient } from '@tanstack/react-query';
@@ -51,8 +51,9 @@ export const getServerSideProps: GetServerSideProps<MenuListProps> = async (
       products: menu.products,
       categories: menu.categories,
       variants: menu.variants,
-      selectedProductId:
-        new UrlMenuListQueryRepository().getSelectedProductId(url),
+      selectedProductId: new UrlMenuItemQueryRepository().getSelectedProductId(
+        url
+      ),
       preparingCount: payments.filter(
         (payment) => payment.fulfillmentStatus === 'preparing'
       ).length,
