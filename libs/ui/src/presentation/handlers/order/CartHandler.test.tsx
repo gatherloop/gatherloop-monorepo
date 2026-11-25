@@ -58,8 +58,9 @@ const renderHandler = ({
 } = {}) => {
   const tableResolveUsecase = new TableResolveUsecase(
     tableRepository,
-    { code: TABLE_CODE },
-    { sessionRepository }
+    sessionRepository,
+    cartRepository,
+    { code: TABLE_CODE }
   );
   const cartUsecase = new CartUsecase(cartRepository, cartQueryRepository);
   const checkoutUsecase = new CheckoutUsecase(paymentRepository, {
@@ -69,10 +70,7 @@ const renderHandler = ({
     enabledMethods,
     cashierLocation,
   });
-  const paymentCancelUsecase = new PaymentCancelUsecase(paymentRepository, {
-    reference: '',
-    method: 'qris',
-  });
+  const paymentCancelUsecase = new PaymentCancelUsecase(paymentRepository);
 
   return {
     cartRepository,

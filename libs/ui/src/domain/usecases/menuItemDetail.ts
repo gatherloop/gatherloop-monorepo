@@ -1,6 +1,6 @@
 import { match, P } from 'ts-pattern';
 import { Product, Variant } from '../entities';
-import { MenuRepository } from '../repositories';
+import { MenuItemQueryRepository, MenuRepository } from '../repositories';
 import { Usecase } from './IUsecase';
 
 type Context = {
@@ -11,6 +11,7 @@ type Context = {
   amount: number;
   note: string;
   errorMessage: string | null;
+  isValidationVisible: boolean;
 };
 
 export type MenuItemDetailState = (
@@ -32,13 +33,8 @@ export type MenuItemDetailAction =
   | { type: 'RESOLVE_VARIANT_ERROR'; message: string }
   | { type: 'CHANGE_AMOUNT'; amount: number }
   | { type: 'CHANGE_NOTE'; note: string }
-  // D6 in docs/trd-order-app-composition-and-ssr.md — the same shape
-  // ProductDeleteUsecase's SHOW_CONFIRMATION uses to receive the product it
-  // is asked to act on. `product` is optional: the menu screen already has
-  // the full `Product` (options included) from its own fetch, and passes it
-  // along so opening the sheet costs no network call — the fallback fetch
-  // below only runs when it isn't given (e.g. a deep link racing the menu
-  // fetch).
+  | { type: 'CLEAR_PRODUCT' }
+  | { type: 'SHOW_VALIDATION' }
   | {
       type: 'SELECT_PRODUCT';
       productId: number;
@@ -94,18 +90,26 @@ export class MenuItemDetailUsecase extends Usecase<
   MenuItemDetailParams
 > {
   menuRepository: MenuRepository;
+  menuItemQueryRepository: MenuItemQueryRepository;
   params: MenuItemDetailParams;
 
-  constructor(menuRepository: MenuRepository, params: MenuItemDetailParams) {
+  constructor(
+    menuRepository: MenuRepository,
+    menuItemQueryRepository: MenuItemQueryRepository,
+    params: MenuItemDetailParams
+  ) {
     super();
     this.menuRepository = menuRepository;
+    this.menuItemQueryRepository = menuItemQueryRepository;
     this.params = params;
   }
 
   getInitialState(): MenuItemDetailState {
     const product = this.params.product ?? null;
     const context: Context = {
-      productId: this.params.productId,
+      productId:
+        this.params.productId ??
+        this.menuItemQueryRepository.getSelectedProductId(),
       product,
       selectedOptionValueIds: product
         ? initialSelectedOptionValueIds(product)
@@ -114,6 +118,7 @@ export class MenuItemDetailUsecase extends Usecase<
       amount: 1,
       note: '',
       errorMessage: null,
+      isValidationVisible: false,
     };
 
     if (context.productId === null) {
@@ -174,8 +179,28 @@ export class MenuItemDetailUsecase extends Usecase<
               amount: 1,
               note: '',
               errorMessage: null,
+              isValidationVisible: false,
             };
           }
+        )
+        .with([P._, { type: 'CLEAR_PRODUCT' }], ([state]) => ({
+          ...state,
+          type: 'idle',
+          productId: null,
+          product: null,
+          selectedOptionValueIds: [],
+          variant: null,
+          amount: 1,
+          note: '',
+          errorMessage: null,
+          isValidationVisible: false,
+        }))
+        .with(
+          [
+            { type: P.union('selectingOptions', 'resolvingVariant', 'ready') },
+            { type: 'SHOW_VALIDATION' },
+          ],
+          ([state]) => ({ ...state, isValidationVisible: true })
         )
         .with(
           [{ type: 'loadingProduct' }, { type: 'FETCH_SUCCESS' }],
@@ -294,6 +319,12 @@ export class MenuItemDetailUsecase extends Usecase<
     state: MenuItemDetailState,
     dispatch: (action: MenuItemDetailAction) => void
   ): void {
+    if (
+      state.productId !== this.menuItemQueryRepository.getSelectedProductId()
+    ) {
+      this.menuItemQueryRepository.setSelectedProductId(state.productId);
+    }
+
     match(state)
       // `idle` means nothing is selected (D6) — there is nothing to fetch,
       // unlike the old "always has a productId" shape this replaced.

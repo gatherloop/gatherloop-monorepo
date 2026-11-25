@@ -6,44 +6,40 @@ import (
 )
 
 type PaymentVerificationUsecase struct {
-	paymentRepository             PaymentRepository
-	paymentVerificationRepository PaymentVerificationRepository
-	transactionRepository         TransactionRepository
-	cartRepository                CartRepository
-	kdsNotificationRepository     KdsNotificationRepository
-	paymentVerificationService    PaymentVerificationService
-	paymentService                PaymentService
-	kdsNotificationDispatcher     KdsNotificationDispatcher
+	paymentRepoPort             PaymentRepoPort
+	paymentVerificationRepoPort PaymentVerificationRepoPort
+	transactionRepoPort         TransactionRepoPort
+	cartRepoPort                CartRepoPort
+	kdsNotificationRepoPort     KdsNotificationRepoPort
+	paymentVerificationService  PaymentVerificationService
+	paymentService              PaymentService
+	kdsNotificationService      KdsNotificationService
 }
 
 func NewPaymentVerificationUsecase(
-	paymentRepository PaymentRepository,
-	paymentVerificationRepository PaymentVerificationRepository,
-	transactionRepository TransactionRepository,
-	cartRepository CartRepository,
-	kdsNotificationRepository KdsNotificationRepository,
+	paymentRepoPort PaymentRepoPort,
+	paymentVerificationRepoPort PaymentVerificationRepoPort,
+	transactionRepoPort TransactionRepoPort,
+	cartRepoPort CartRepoPort,
+	kdsNotificationRepoPort KdsNotificationRepoPort,
 	paymentVerificationService PaymentVerificationService,
 	paymentService PaymentService,
-	kdsNotificationDispatcher KdsNotificationDispatcher,
+	kdsNotificationService KdsNotificationService,
 ) PaymentVerificationUsecase {
 	return PaymentVerificationUsecase{
-		paymentRepository:             paymentRepository,
-		paymentVerificationRepository: paymentVerificationRepository,
-		transactionRepository:         transactionRepository,
-		cartRepository:                cartRepository,
-		kdsNotificationRepository:     kdsNotificationRepository,
-		paymentVerificationService:    paymentVerificationService,
-		paymentService:                paymentService,
-		kdsNotificationDispatcher:     kdsNotificationDispatcher,
+		paymentRepoPort:             paymentRepoPort,
+		paymentVerificationRepoPort: paymentVerificationRepoPort,
+		transactionRepoPort:         transactionRepoPort,
+		cartRepoPort:                cartRepoPort,
+		kdsNotificationRepoPort:     kdsNotificationRepoPort,
+		paymentVerificationService:  paymentVerificationService,
+		paymentService:              paymentService,
+		kdsNotificationService:      kdsNotificationService,
 	}
 }
 
-// GetVerification is D14: a staff-only read of the presence photo. 404 when the transaction has
-// no linked payment, the payment is not COD, or the photo is already gone — decided (approved or
-// rejected) or never existed — never distinguishing which, so the barista's next move is always
-// the same: refetch the list.
 func (usecase PaymentVerificationUsecase) GetVerification(ctx context.Context, transactionId int64) (PaymentVerificationPhoto, *Error) {
-	payment, err := usecase.paymentRepository.GetPaymentByTransactionId(ctx, transactionId)
+	payment, err := usecase.paymentRepoPort.GetPaymentByTransactionId(ctx, transactionId)
 	if err != nil {
 		if err.Type == NotFound {
 			return PaymentVerificationPhoto{}, &Error{Type: NotFound, Message: "verification photo not found"}
@@ -54,7 +50,7 @@ func (usecase PaymentVerificationUsecase) GetVerification(ctx context.Context, t
 		return PaymentVerificationPhoto{}, &Error{Type: NotFound, Message: "verification photo not found"}
 	}
 
-	photo, photoErr := usecase.paymentVerificationRepository.GetByPaymentId(ctx, payment.Id)
+	photo, photoErr := usecase.paymentVerificationRepoPort.GetByPaymentId(ctx, payment.Id)
 	if photoErr != nil {
 		if photoErr.Type == NotFound {
 			return PaymentVerificationPhoto{}, &Error{Type: NotFound, Message: "verification photo not found"}
@@ -65,11 +61,8 @@ func (usecase PaymentVerificationUsecase) GetVerification(ctx context.Context, t
 	return photo, nil
 }
 
-// Approve is FR-4: the bar may start making it. It converts the cart so the guest can start a new
-// order (D16), enqueues the existing order_paid kind — COD's "start making" signal (D6) — and
-// deletes the photo in the same transaction as the decision (D5).
 func (usecase PaymentVerificationUsecase) Approve(ctx context.Context, transactionId int64) *Error {
-	err := usecase.paymentRepository.BeginTransaction(ctx, func(ctxWithTx context.Context) *Error {
+	err := usecase.paymentRepoPort.BeginTransaction(ctx, func(ctxWithTx context.Context) *Error {
 		payment, resolveErr := usecase.paymentVerificationService.ResolveAwaitingCodPayment(ctxWithTx, transactionId)
 		if resolveErr != nil {
 			return resolveErr
@@ -84,45 +77,40 @@ func (usecase PaymentVerificationUsecase) Approve(ctx context.Context, transacti
 		payment.VerificationStatus = &approved
 		payment.VerifiedAt = &now
 
-		if _, updateErr := usecase.paymentRepository.UpdatePaymentById(ctxWithTx, payment, payment.Id); updateErr != nil {
+		if _, updateErr := usecase.paymentRepoPort.UpdatePaymentById(ctxWithTx, payment, payment.Id); updateErr != nil {
 			return updateErr
 		}
 
-		if deleteErr := usecase.paymentVerificationRepository.DeleteByPaymentId(ctxWithTx, payment.Id); deleteErr != nil {
+		if deleteErr := usecase.paymentVerificationRepoPort.DeleteByPaymentId(ctxWithTx, payment.Id); deleteErr != nil {
 			return deleteErr
 		}
 
-		transaction, txErr := usecase.transactionRepository.GetTransactionById(ctxWithTx, *payment.TransactionId)
+		transaction, txErr := usecase.transactionRepoPort.GetTransactionById(ctxWithTx, *payment.TransactionId)
 		if txErr != nil {
 			return txErr
 		}
 
-		cart, cartErr := usecase.cartRepository.GetCartById(ctxWithTx, payment.CartId)
+		cart, cartErr := usecase.cartRepoPort.GetCartById(ctxWithTx, payment.CartId)
 		if cartErr != nil {
 			return cartErr
 		}
 		cart.Status = CartStatusConverted
-		if _, updateCartErr := usecase.cartRepository.UpdateCartById(ctxWithTx, cart, cart.Id); updateCartErr != nil {
+		if _, updateCartErr := usecase.cartRepoPort.UpdateCartById(ctxWithTx, cart, cart.Id); updateCartErr != nil {
 			return updateCartErr
 		}
 
-		return usecase.kdsNotificationRepository.EnqueueForTransaction(ctxWithTx, transaction, KdsNotificationKindOrderPaid)
+		return usecase.kdsNotificationRepoPort.EnqueueForTransaction(ctxWithTx, transaction, KdsNotificationKindOrderPaid)
 	})
 
-	// D6: kicked after the commit so the barista's HTTP response never waits on Expo.
 	if err == nil {
-		usecase.kdsNotificationDispatcher.TriggerDispatch()
+		usecase.kdsNotificationService.TriggerDispatch()
 	}
 
 	return err
 }
 
-// Reject is FR-4: the barista could not confirm the guest is in the café.
-// finalizeUncollectedPayment already moves the payment to cancelled/rejected, releases
-// availability, soft-deletes the transaction (D7) and deletes the photo (FR-6/D5) — every exit
-// from "cod, pending, awaiting" shares that one function.
 func (usecase PaymentVerificationUsecase) Reject(ctx context.Context, transactionId int64) *Error {
-	return usecase.paymentRepository.BeginTransaction(ctx, func(ctxWithTx context.Context) *Error {
+	return usecase.paymentRepoPort.BeginTransaction(ctx, func(ctxWithTx context.Context) *Error {
 		payment, resolveErr := usecase.paymentVerificationService.ResolveAwaitingCodPayment(ctxWithTx, transactionId)
 		if resolveErr != nil {
 			return resolveErr

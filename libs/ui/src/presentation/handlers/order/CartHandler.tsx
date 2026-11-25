@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect } from 'react';
 import { match, P } from 'ts-pattern';
 import { useRouter } from 'solito/router';
 import { Cart } from '../../../domain/entities/Cart';
@@ -8,7 +8,7 @@ import { PaymentCancelUsecase } from '../../../domain/usecases/paymentCancel';
 import { TableResolveUsecase } from '../../../domain/usecases/tableResolve';
 import { useCart } from '../hooks/useCart';
 import { useCheckout } from '../hooks/useCheckout';
-import { usePaymentCancelSyncedTo } from '../hooks/usePaymentCancelSyncedTo';
+import { useUsecase } from '../hooks/useUsecase';
 import { useTableResolve } from '../hooks/useTableResolve';
 import { CodPhotoCaptureSheetProps } from '../../views/components/checkout/CodPhotoCaptureSheet';
 import { CustomerDetailsSheetProps } from '../../views/components/checkout/CustomerDetailsSheet';
@@ -68,7 +68,6 @@ export const CartHandler = ({
   const cart = useCart(cartUsecase);
   const checkout = useCheckout(checkoutUsecase);
   const router = useRouter();
-  const [isClearConfirmationOpen, setIsClearConfirmationOpen] = useState(false);
 
   useEffect(() => {
     if (checkout.state.type !== 'created' || !checkout.state.payment) return;
@@ -84,38 +83,31 @@ export const CartHandler = ({
   const mutating = isMutating(cart.state);
   const pendingPayment = cart.state.cart?.pendingPayment ?? null;
 
-  const paymentCancel = usePaymentCancelSyncedTo(
-    paymentCancelUsecase,
-    pendingPayment && {
-      reference: pendingPayment.partnerReferenceNo,
-      method: pendingPayment.method,
-    }
-  );
-  const handledCancelResultRef =
-    useRef<typeof paymentCancel.state.result>(null);
+  const paymentCancel = useUsecase(paymentCancelUsecase);
 
   useEffect(() => {
-    if (
-      paymentCancel.state.type !== 'settled' ||
-      !paymentCancel.state.result ||
-      handledCancelResultRef.current === paymentCancel.state.result
-    ) {
+    if (paymentCancel.state.type !== 'settled' || !paymentCancel.state.result) {
       return;
     }
-    handledCancelResultRef.current = paymentCancel.state.result;
+    const { result } = paymentCancel.state;
+    paymentCancel.dispatch({ type: 'ACKNOWLEDGE' });
 
-    if (paymentCancel.state.result.status === 'paid') {
-      router.push(`/orders/${paymentCancel.state.result.reference}`);
+    if (result.status === 'paid') {
+      router.push(`/orders/${result.reference}`);
     } else {
       cart.dispatch({ type: 'FETCH' });
     }
-  }, [paymentCancel.state, router, cart.dispatch]);
+  }, [paymentCancel.state, paymentCancel.dispatch, router, cart.dispatch]);
 
   const cancelConfirmation = {
     isOpen:
       paymentCancel.state.type === 'confirming' ||
       paymentCancel.state.type === 'cancelling',
-    method: paymentCancel.state.method,
+    method:
+      paymentCancel.state.type === 'confirming' ||
+      paymentCancel.state.type === 'cancelling'
+        ? paymentCancel.state.method
+        : pendingPayment?.method ?? 'qris',
     isCancelling: paymentCancel.state.type === 'cancelling',
     onConfirm: () => paymentCancel.dispatch({ type: 'CONFIRM' }),
     onDismiss: () => paymentCancel.dispatch({ type: 'DISMISS' }),
@@ -128,7 +120,12 @@ export const CartHandler = ({
         cancelAction: pendingPayment.canCancel
           ? {
               label: 'Batalkan pembayaran',
-              onPress: () => paymentCancel.dispatch({ type: 'REQUEST' }),
+              onPress: () =>
+                paymentCancel.dispatch({
+                  type: 'REQUEST',
+                  reference: pendingPayment.partnerReferenceNo,
+                  method: pendingPayment.method,
+                }),
             }
           : null,
       }
@@ -141,16 +138,6 @@ export const CartHandler = ({
         ) ?? null
       : null;
 
-  const [seededItemId, setSeededItemId] = useState<number | null>(null);
-  const [amount, setAmount] = useState(1);
-  const [note, setNote] = useState('');
-
-  if (selectedItem && selectedItem.id !== seededItemId) {
-    setAmount(selectedItem.amount);
-    setNote(selectedItem.note);
-    setSeededItemId(selectedItem.id);
-  }
-
   const itemEdit: (CartItemEditScreenProps & { isOpen: true }) | null =
     !selectedItem
       ? null
@@ -160,12 +147,12 @@ export const CartHandler = ({
             if (!isOpen) cart.dispatch({ type: 'CLEAR_ITEM' });
           },
           item: selectedItem,
-          amount,
-          onAmountChange: setAmount,
-          note,
-          onNoteChange: setNote,
+          defaultValues: {
+            amount: selectedItem.amount,
+            note: selectedItem.note,
+          },
           isSaving: mutating,
-          onSavePress: () => {
+          onSubmit: ({ amount, note }) => {
             cart.dispatch({
               type: 'UPDATE_ITEM',
               cartItemId: selectedItem.id,
@@ -250,7 +237,7 @@ export const CartHandler = ({
       variant={toScreenVariant(cart.state)}
       isMutating={mutating}
       errorMessage={!pendingPayment ? cart.state.errorMessage : null}
-      isClearConfirmationOpen={isClearConfirmationOpen}
+      isClearConfirmationOpen={cart.state.type === 'confirmingClear'}
       onAmountChange={(cartItemId, amount) => {
         const item = cart.state.cart?.items.find(
           (existing) => existing.id === cartItemId
@@ -269,13 +256,12 @@ export const CartHandler = ({
       onEditPress={(cartItemId) =>
         cart.dispatch({ type: 'SELECT_ITEM', itemId: cartItemId })
       }
-      onClearPress={() => setIsClearConfirmationOpen(true)}
-      onClearConfirm={() => {
-        cart.dispatch({ type: 'CLEAR' });
-        setIsClearConfirmationOpen(false);
+      onClearPress={() => cart.dispatch({ type: 'REQUEST_CLEAR' })}
+      onClearConfirm={() => cart.dispatch({ type: 'CLEAR' })}
+      onClearCancel={() => cart.dispatch({ type: 'CANCEL_CLEAR' })}
+      onClearConfirmationOpenChange={(isOpen) => {
+        if (!isOpen) cart.dispatch({ type: 'CANCEL_CLEAR' });
       }}
-      onClearCancel={() => setIsClearConfirmationOpen(false)}
-      onClearConfirmationOpenChange={setIsClearConfirmationOpen}
       onAddMoreItemsPress={() =>
         router.push(`/t/${tableResolveUsecase.params.code}`)
       }

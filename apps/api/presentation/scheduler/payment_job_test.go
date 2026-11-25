@@ -11,7 +11,7 @@ import (
 
 // Both payment sweeps touch exactly one repository on an empty batch, so every other dependency
 // stays nil rather than dragging PaymentUsecase's whole graph into a scheduler test.
-func newPaymentUsecase(paymentRepository domain.PaymentRepository, paymentVerificationRepository domain.PaymentVerificationRepository) domain.PaymentUsecase {
+func newPaymentUsecase(paymentRepository domain.PaymentRepoPort, paymentVerificationRepository domain.PaymentVerificationRepoPort) domain.PaymentUsecase {
 	return domain.NewPaymentUsecase(
 		paymentRepository,
 		nil,
@@ -24,14 +24,12 @@ func newPaymentUsecase(paymentRepository domain.PaymentRepository, paymentVerifi
 		paymentVerificationRepository,
 		domain.PaymentService{},
 		domain.AvailabilityService{},
-		nil,
-		domain.NoopWhatsappNumberVerifier{},
+		domain.WhatsappNumberVerificationService{},
+		domain.KdsNotificationService{},
 		300,
 		600,
 		900,
 		1,
-		false,
-		false,
 	)
 }
 
@@ -49,7 +47,7 @@ func TestPaymentExpiryJob_RunReadsExpirablePayments(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	paymentRepository := mock.NewMockPaymentRepository(ctrl)
+	paymentRepository := mock.NewMockPaymentRepoPort(ctrl)
 	paymentRepository.EXPECT().GetExpirablePayments(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil)
 
 	job := PaymentExpiryJob{usecase: newPaymentUsecase(paymentRepository, nil)}
@@ -63,7 +61,7 @@ func TestPaymentVerificationPhotoCleanupJob_RunDeletesOrphanedPhotos(t *testing.
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	paymentVerificationRepository := mock.NewMockPaymentVerificationRepository(ctrl)
+	paymentVerificationRepository := mock.NewMockPaymentVerificationRepoPort(ctrl)
 	paymentVerificationRepository.EXPECT().DeleteOrphaned(gomock.Any(), gomock.Any()).Return(int64(0), nil)
 
 	job := PaymentVerificationPhotoCleanupJob{usecase: newPaymentUsecase(nil, paymentVerificationRepository)}

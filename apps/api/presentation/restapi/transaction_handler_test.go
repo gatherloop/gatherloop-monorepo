@@ -19,13 +19,13 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
-func newTransactionHandler(t *testing.T, setupMocks func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository)) (restapi.TransactionHandler, *gomock.Controller) {
+func newTransactionHandler(t *testing.T, setupMocks func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort)) (restapi.TransactionHandler, *gomock.Controller) {
 	ctrl := gomock.NewController(t)
-	txRepo := mock.NewMockTransactionRepository(ctrl)
-	variantRepo := mock.NewMockVariantRepository(ctrl)
-	couponRepo := mock.NewMockCouponRepository(ctrl)
-	walletRepo := mock.NewMockWalletRepository(ctrl)
-	availabilityRepo := mock.NewMockAvailabilityRepository(ctrl)
+	txRepo := mock.NewMockTransactionRepoPort(ctrl)
+	variantRepo := mock.NewMockVariantRepoPort(ctrl)
+	couponRepo := mock.NewMockCouponRepoPort(ctrl)
+	walletRepo := mock.NewMockWalletRepoPort(ctrl)
+	availabilityRepo := mock.NewMockAvailabilityRepoPort(ctrl)
 	availabilityRepo.EXPECT().LockVariantById(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, id int64) (domain.Variant, *domain.Error) {
 			return domain.Variant{Id: id, IsAvailable: true, Product: domain.Product{IsAvailable: true}}, nil
@@ -33,26 +33,24 @@ func newTransactionHandler(t *testing.T, setupMocks func(txRepo *mock.MockTransa
 	availabilityRepo.EXPECT().LockProductById(gomock.Any(), gomock.Any()).AnyTimes().Return(domain.Product{IsAvailable: true}, nil)
 	availabilityRepo.EXPECT().UpdateVariantAvailableQuantity(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes().Return(nil)
 	availabilityRepo.EXPECT().UpdateProductAvailableQuantity(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes().Return(nil)
-	kdsNotificationRepo := mock.NewMockKdsNotificationRepository(ctrl)
+	kdsNotificationRepo := mock.NewMockKdsNotificationRepoPort(ctrl)
 	kdsNotificationRepo.EXPECT().EnqueueForTransaction(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	kdsNotificationDispatcher := mock.NewMockKdsNotificationDispatcher(ctrl)
-	kdsNotificationDispatcher.EXPECT().TriggerDispatch().AnyTimes()
-	paymentRepo := mock.NewMockPaymentRepository(ctrl)
+	kdsNotificationDispatcher := permissiveKdsNotificationService(ctrl)
+	paymentRepo := mock.NewMockPaymentRepoPort(ctrl)
 	// FR-6: an already-paid payment makes settleOrderPayment a no-op for handler tests that
 	// don't care about it, so it never reaches UpdatePaymentById or the cart repository. It also
 	// never trips the D8 cancelled-order guard, since the payment is paid.
 	paymentRepo.EXPECT().GetPaymentByTransactionId(gomock.Any(), gomock.Any()).Return(domain.Payment{SessionId: "session-1", Status: domain.PaymentStatePaid}, nil).AnyTimes()
 	paymentRepo.EXPECT().GetPaymentByTransactionIdForUpdate(gomock.Any(), gomock.Any()).Return(domain.Payment{SessionId: "session-1", Status: domain.PaymentStatePaid}, nil).AnyTimes()
-	guestNotificationRepo := mock.NewMockGuestNotificationRepository(ctrl)
+	guestNotificationRepo := mock.NewMockGuestNotificationRepoPort(ctrl)
 	guestNotificationRepo.EXPECT().EnqueueForCompletedTransaction(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	guestNotificationDispatcher := mock.NewMockGuestNotificationDispatcher(ctrl)
-	guestNotificationDispatcher.EXPECT().TriggerDispatch().AnyTimes()
-	cartRepo := mock.NewMockCartRepository(ctrl)
-	paymentVerificationRepo := mock.NewMockPaymentVerificationRepository(ctrl)
+	guestNotificationDispatcher := permissiveGuestNotificationService(ctrl)
+	cartRepo := mock.NewMockCartRepoPort(ctrl)
+	paymentVerificationRepo := mock.NewMockPaymentVerificationRepoPort(ctrl)
 	paymentVerificationRepo.EXPECT().DeleteByPaymentId(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	setupMocks(txRepo, variantRepo, couponRepo, walletRepo)
 	availabilityService := domain.NewAvailabilityService(nil, nil, availabilityRepo)
-	paymentService := domain.NewPaymentService(txRepo, paymentRepo, paymentVerificationRepo, nil, cartRepo, walletRepo, kdsNotificationRepo, availabilityService, 0, false, kdsNotificationDispatcher)
+	paymentService := domain.NewPaymentService(txRepo, paymentRepo, paymentVerificationRepo, nil, cartRepo, walletRepo, kdsNotificationRepo, availabilityService, kdsNotificationDispatcher, 0)
 	transactionService := domain.NewTransactionService(couponRepo, paymentRepo, cartRepo, paymentService)
 	usecase := domain.NewTransactionUsecase(txRepo, variantRepo, walletRepo, paymentRepo, guestNotificationRepo, transactionService, paymentService, availabilityService, kdsNotificationDispatcher, guestNotificationDispatcher)
 	return restapi.NewTransactionHandler(usecase), ctrl
@@ -62,13 +60,13 @@ func TestTransactionHandler_GetTransactionList(t *testing.T) {
 	tests := []struct {
 		name           string
 		url            string
-		setupMocks     func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository)
+		setupMocks     func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort)
 		expectedStatus int
 	}{
 		{
 			name: "success",
 			url:  "/transactions",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().GetTransactionList(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]domain.Transaction{{Id: 1, Source: domain.TransactionSourcePos}}, nil)
 				txRepo.EXPECT().GetTransactionListTotal(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(int64(1), nil)
 			},
@@ -77,14 +75,14 @@ func TestTransactionHandler_GetTransactionList(t *testing.T) {
 		{
 			name: "invalid skip param",
 			url:  "/transactions?skip=abc",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 			},
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
 			name: "repo error",
 			url:  "/transactions",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().GetTransactionList(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, &domain.Error{Type: domain.InternalServerError, Message: "db error"})
 			},
 			expectedStatus: http.StatusInternalServerError,
@@ -104,7 +102,7 @@ func TestTransactionHandler_GetTransactionList(t *testing.T) {
 }
 
 func TestTransactionHandler_GetTransactionList_SerializesSource(t *testing.T) {
-	handler, ctrl := newTransactionHandler(t, func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+	handler, ctrl := newTransactionHandler(t, func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 		txRepo.EXPECT().GetTransactionList(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 			Return([]domain.Transaction{{Id: 1, Source: domain.TransactionSourcePos, DiningOption: domain.DiningOptionDineIn}}, nil)
 		txRepo.EXPECT().GetTransactionListTotal(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(int64(1), nil)
@@ -153,7 +151,7 @@ func TestTransactionHandler_GetTransactionList_SerializesPaymentMethod(t *testin
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler, ctrl := newTransactionHandler(t, func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			handler, ctrl := newTransactionHandler(t, func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().GetTransactionList(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 					Return([]domain.Transaction{tt.transaction}, nil)
 				txRepo.EXPECT().GetTransactionListTotal(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(int64(1), nil)
@@ -180,7 +178,7 @@ func strPtr(s string) *string {
 func TestTransactionHandler_GetTransactionList_FilterBySource(t *testing.T) {
 	orderSource := domain.TransactionSourceOrder
 
-	handler, ctrl := newTransactionHandler(t, func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+	handler, ctrl := newTransactionHandler(t, func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 		txRepo.EXPECT().GetTransactionList(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), &orderSource, nil).
 			Return([]domain.Transaction{{Id: 2, Source: domain.TransactionSourceOrder, DiningOption: domain.DiningOptionDineIn}}, nil)
 		txRepo.EXPECT().GetTransactionListTotal(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), &orderSource, nil).Return(int64(1), nil)
@@ -220,7 +218,7 @@ func TestTransactionHandler_GetTransactionList_FilterByFulfillment(t *testing.T)
 		t.Run(tt.name, func(t *testing.T) {
 			expectedFulfillment := tt.expectedFulfillment
 
-			handler, ctrl := newTransactionHandler(t, func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			handler, ctrl := newTransactionHandler(t, func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().GetTransactionList(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), &expectedFulfillment).
 					Return([]domain.Transaction{{Id: 2, Source: domain.TransactionSourceOrder}}, nil)
 				txRepo.EXPECT().GetTransactionListTotal(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), &expectedFulfillment).Return(int64(1), nil)
@@ -236,7 +234,7 @@ func TestTransactionHandler_GetTransactionList_FilterByFulfillment(t *testing.T)
 	}
 
 	t.Run("all does not filter by fulfillment", func(t *testing.T) {
-		handler, ctrl := newTransactionHandler(t, func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+		handler, ctrl := newTransactionHandler(t, func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 			txRepo.EXPECT().GetTransactionList(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), nil).
 				Return([]domain.Transaction{{Id: 1, Source: domain.TransactionSourcePos}}, nil)
 			txRepo.EXPECT().GetTransactionListTotal(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), nil).Return(int64(1), nil)
@@ -255,13 +253,13 @@ func TestTransactionHandler_GetTransactionById(t *testing.T) {
 	tests := []struct {
 		name           string
 		transactionId  string
-		setupMocks     func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository)
+		setupMocks     func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort)
 		expectedStatus int
 	}{
 		{
 			name:          "success",
 			transactionId: "1",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().GetTransactionById(gomock.Any(), int64(1)).Return(domain.Transaction{Id: 1}, nil)
 			},
 			expectedStatus: http.StatusOK,
@@ -269,7 +267,7 @@ func TestTransactionHandler_GetTransactionById(t *testing.T) {
 		{
 			name:          "not found",
 			transactionId: "99",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().GetTransactionById(gomock.Any(), int64(99)).Return(domain.Transaction{}, &domain.Error{Type: domain.NotFound, Message: "not found"})
 			},
 			expectedStatus: http.StatusNotFound,
@@ -277,7 +275,7 @@ func TestTransactionHandler_GetTransactionById(t *testing.T) {
 		{
 			name:          "invalid id",
 			transactionId: "abc",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 			},
 			expectedStatus: http.StatusBadRequest,
 		},
@@ -300,13 +298,13 @@ func TestTransactionHandler_CreateTransaction(t *testing.T) {
 	tests := []struct {
 		name           string
 		body           string
-		setupMocks     func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository)
+		setupMocks     func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort)
 		expectedStatus int
 	}{
 		{
 			name: "success",
 			body: `{"name": "Order 1", "pagerNumber": 1, "transactionItems": [{"variantId": 1, "amount": 2, "note": "", "discountAmount": 0}], "transactionCoupons": []}`,
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().BeginTransaction(gomock.Any(), gomock.Any()).DoAndReturn(
 					func(ctx context.Context, cb func(context.Context) *domain.Error) *domain.Error { return cb(ctx) })
 				variantRepo.EXPECT().GetVariantById(gomock.Any(), int64(1)).Return(domain.Variant{Id: 1, Price: 10000}, nil)
@@ -317,14 +315,14 @@ func TestTransactionHandler_CreateTransaction(t *testing.T) {
 		{
 			name: "invalid JSON body",
 			body: `{invalid`,
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 			},
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
 			name: "variant not found",
 			body: `{"name": "Order 1", "pagerNumber": 1, "transactionItems": [{"variantId": 99, "amount": 1, "note": "", "discountAmount": 0}], "transactionCoupons": []}`,
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().BeginTransaction(gomock.Any(), gomock.Any()).DoAndReturn(
 					func(ctx context.Context, cb func(context.Context) *domain.Error) *domain.Error { return cb(ctx) })
 				variantRepo.EXPECT().GetVariantById(gomock.Any(), int64(99)).Return(domain.Variant{}, &domain.Error{Type: domain.NotFound, Message: "variant not found"})
@@ -334,7 +332,7 @@ func TestTransactionHandler_CreateTransaction(t *testing.T) {
 		{
 			name: "invalid dining option",
 			body: `{"name": "Order 1", "pagerNumber": 1, "diningOption": "delivery", "transactionItems": [], "transactionCoupons": []}`,
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 			},
 			expectedStatus: http.StatusBadRequest,
 		},
@@ -354,7 +352,7 @@ func TestTransactionHandler_CreateTransaction(t *testing.T) {
 }
 
 func TestTransactionHandler_CreateTransaction_DefaultsToPos(t *testing.T) {
-	handler, ctrl := newTransactionHandler(t, func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+	handler, ctrl := newTransactionHandler(t, func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 		txRepo.EXPECT().BeginTransaction(gomock.Any(), gomock.Any()).DoAndReturn(
 			func(ctx context.Context, cb func(context.Context) *domain.Error) *domain.Error { return cb(ctx) })
 		variantRepo.EXPECT().GetVariantById(gomock.Any(), int64(1)).Return(domain.Variant{Id: 1, Price: 10000}, nil)
@@ -402,7 +400,7 @@ func TestTransactionHandler_CreateTransaction_DiningOptionRoundTrips(t *testing.
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler, ctrl := newTransactionHandler(t, func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			handler, ctrl := newTransactionHandler(t, func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().BeginTransaction(gomock.Any(), gomock.Any()).DoAndReturn(
 					func(ctx context.Context, cb func(context.Context) *domain.Error) *domain.Error { return cb(ctx) })
 				txRepo.EXPECT().CreateTransaction(gomock.Any(), gomock.Any()).DoAndReturn(
@@ -439,14 +437,14 @@ func TestTransactionHandler_UpdateTransactionById(t *testing.T) {
 		name           string
 		transactionId  string
 		body           string
-		setupMocks     func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository)
+		setupMocks     func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort)
 		expectedStatus int
 	}{
 		{
 			name:          "success",
 			transactionId: "1",
 			body:          `{"name": "Order 1", "pagerNumber": 1, "transactionItems": [{"variantId": 1, "amount": 1, "note": "", "discountAmount": 0}], "transactionCoupons": []}`,
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().BeginTransaction(gomock.Any(), gomock.Any()).DoAndReturn(
 					func(ctx context.Context, cb func(context.Context) *domain.Error) *domain.Error { return cb(ctx) })
 				txRepo.EXPECT().GetTransactionById(gomock.Any(), int64(1)).Return(domain.Transaction{Id: 1, PaidAt: nil}, nil)
@@ -459,7 +457,7 @@ func TestTransactionHandler_UpdateTransactionById(t *testing.T) {
 			name:          "invalid id",
 			transactionId: "abc",
 			body:          `{}`,
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 			},
 			expectedStatus: http.StatusBadRequest,
 		},
@@ -467,7 +465,7 @@ func TestTransactionHandler_UpdateTransactionById(t *testing.T) {
 			name:          "cannot update paid transaction",
 			transactionId: "2",
 			body:          `{"name": "Order 1", "pagerNumber": 1, "transactionItems": [], "transactionCoupons": []}`,
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				paidAt := time.Now()
 				txRepo.EXPECT().BeginTransaction(gomock.Any(), gomock.Any()).DoAndReturn(
 					func(ctx context.Context, cb func(context.Context) *domain.Error) *domain.Error { return cb(ctx) })
@@ -495,13 +493,13 @@ func TestTransactionHandler_DeleteTransactionById(t *testing.T) {
 	tests := []struct {
 		name           string
 		transactionId  string
-		setupMocks     func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository)
+		setupMocks     func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort)
 		expectedStatus int
 	}{
 		{
 			name:          "success",
 			transactionId: "1",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().BeginTransaction(gomock.Any(), gomock.Any()).DoAndReturn(
 					func(ctx context.Context, cb func(context.Context) *domain.Error) *domain.Error { return cb(ctx) })
 				txRepo.EXPECT().GetTransactionById(gomock.Any(), int64(1)).Return(domain.Transaction{Id: 1, PaidAt: nil}, nil)
@@ -512,14 +510,14 @@ func TestTransactionHandler_DeleteTransactionById(t *testing.T) {
 		{
 			name:          "invalid id",
 			transactionId: "abc",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 			},
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
 			name:          "not found",
 			transactionId: "99",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().BeginTransaction(gomock.Any(), gomock.Any()).DoAndReturn(
 					func(ctx context.Context, cb func(context.Context) *domain.Error) *domain.Error { return cb(ctx) })
 				txRepo.EXPECT().GetTransactionById(gomock.Any(), int64(99)).Return(domain.Transaction{}, &domain.Error{Type: domain.NotFound, Message: "not found"})
@@ -546,14 +544,14 @@ func TestTransactionHandler_PayTransaction(t *testing.T) {
 		name           string
 		transactionId  string
 		body           string
-		setupMocks     func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository)
+		setupMocks     func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort)
 		expectedStatus int
 	}{
 		{
 			name:          "success",
 			transactionId: "1",
 			body:          `{"walletId": 1, "paidAmount": 20000}`,
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().BeginTransaction(gomock.Any(), gomock.Any()).DoAndReturn(
 					func(ctx context.Context, cb func(context.Context) *domain.Error) *domain.Error { return cb(ctx) })
 				txRepo.EXPECT().GetTransactionById(gomock.Any(), int64(1)).Return(domain.Transaction{Id: 1, PaidAt: nil, Total: 20000, TransactionItems: []domain.TransactionItem{}}, nil)
@@ -568,7 +566,7 @@ func TestTransactionHandler_PayTransaction(t *testing.T) {
 			name:          "invalid id",
 			transactionId: "abc",
 			body:          `{"walletId": 1, "paidAmount": 20000}`,
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 			},
 			expectedStatus: http.StatusBadRequest,
 		},
@@ -576,7 +574,7 @@ func TestTransactionHandler_PayTransaction(t *testing.T) {
 			name:          "already paid",
 			transactionId: "2",
 			body:          `{"walletId": 1, "paidAmount": 20000}`,
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				paidAt := time.Now()
 				txRepo.EXPECT().BeginTransaction(gomock.Any(), gomock.Any()).DoAndReturn(
 					func(ctx context.Context, cb func(context.Context) *domain.Error) *domain.Error { return cb(ctx) })
@@ -604,13 +602,13 @@ func TestTransactionHandler_UnpayTransaction(t *testing.T) {
 	tests := []struct {
 		name           string
 		transactionId  string
-		setupMocks     func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository)
+		setupMocks     func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort)
 		expectedStatus int
 	}{
 		{
 			name:          "already unpaid",
 			transactionId: "1",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().BeginTransaction(gomock.Any(), gomock.Any()).DoAndReturn(
 					func(ctx context.Context, cb func(context.Context) *domain.Error) *domain.Error { return cb(ctx) })
 				txRepo.EXPECT().GetTransactionById(gomock.Any(), int64(1)).Return(domain.Transaction{Id: 1, PaidAt: nil}, nil)
@@ -620,7 +618,7 @@ func TestTransactionHandler_UnpayTransaction(t *testing.T) {
 		{
 			name:          "invalid id",
 			transactionId: "abc",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 			},
 			expectedStatus: http.StatusBadRequest,
 		},
@@ -643,13 +641,13 @@ func TestTransactionHandler_CompleteTransaction(t *testing.T) {
 	tests := []struct {
 		name           string
 		transactionId  string
-		setupMocks     func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository)
+		setupMocks     func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort)
 		expectedStatus int
 	}{
 		{
 			name:          "success",
 			transactionId: "1",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().BeginTransaction(gomock.Any(), gomock.Any()).DoAndReturn(
 					func(ctx context.Context, cb func(context.Context) *domain.Error) *domain.Error { return cb(ctx) })
 				txRepo.EXPECT().GetTransactionById(gomock.Any(), int64(1)).Return(domain.Transaction{Id: 1, Source: domain.TransactionSourceOrder}, nil)
@@ -660,14 +658,14 @@ func TestTransactionHandler_CompleteTransaction(t *testing.T) {
 		{
 			name:          "invalid id",
 			transactionId: "abc",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 			},
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
 			name:          "not found",
 			transactionId: "99",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().BeginTransaction(gomock.Any(), gomock.Any()).DoAndReturn(
 					func(ctx context.Context, cb func(context.Context) *domain.Error) *domain.Error { return cb(ctx) })
 				txRepo.EXPECT().GetTransactionById(gomock.Any(), int64(99)).Return(domain.Transaction{}, &domain.Error{Type: domain.NotFound, Message: "not found"})
@@ -677,7 +675,7 @@ func TestTransactionHandler_CompleteTransaction(t *testing.T) {
 		{
 			name:          "pos transaction",
 			transactionId: "2",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().BeginTransaction(gomock.Any(), gomock.Any()).DoAndReturn(
 					func(ctx context.Context, cb func(context.Context) *domain.Error) *domain.Error { return cb(ctx) })
 				txRepo.EXPECT().GetTransactionById(gomock.Any(), int64(2)).Return(domain.Transaction{Id: 2, Source: domain.TransactionSourcePos}, nil)
@@ -687,7 +685,7 @@ func TestTransactionHandler_CompleteTransaction(t *testing.T) {
 		{
 			name:          "already completed",
 			transactionId: "3",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				completedAt := time.Now()
 				txRepo.EXPECT().BeginTransaction(gomock.Any(), gomock.Any()).DoAndReturn(
 					func(ctx context.Context, cb func(context.Context) *domain.Error) *domain.Error { return cb(ctx) })
@@ -714,13 +712,13 @@ func TestTransactionHandler_UncompleteTransaction(t *testing.T) {
 	tests := []struct {
 		name           string
 		transactionId  string
-		setupMocks     func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository)
+		setupMocks     func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort)
 		expectedStatus int
 	}{
 		{
 			name:          "success",
 			transactionId: "1",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				completedAt := time.Now()
 				txRepo.EXPECT().BeginTransaction(gomock.Any(), gomock.Any()).DoAndReturn(
 					func(ctx context.Context, cb func(context.Context) *domain.Error) *domain.Error { return cb(ctx) })
@@ -732,14 +730,14 @@ func TestTransactionHandler_UncompleteTransaction(t *testing.T) {
 		{
 			name:          "invalid id",
 			transactionId: "abc",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 			},
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
 			name:          "not completed",
 			transactionId: "2",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().BeginTransaction(gomock.Any(), gomock.Any()).DoAndReturn(
 					func(ctx context.Context, cb func(context.Context) *domain.Error) *domain.Error { return cb(ctx) })
 				txRepo.EXPECT().GetTransactionById(gomock.Any(), int64(2)).Return(domain.Transaction{Id: 2, Source: domain.TransactionSourceOrder, CompletedAt: nil}, nil)
@@ -765,13 +763,13 @@ func TestTransactionHandler_GetTransactionStatistics(t *testing.T) {
 	tests := []struct {
 		name           string
 		url            string
-		setupMocks     func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository)
+		setupMocks     func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort)
 		expectedStatus int
 	}{
 		{
 			name: "success",
 			url:  "/transactions/statistics",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().GetTransactionStatistics(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]domain.TransactionStatistic{{Date: "2024-01", Total: 10000}}, nil)
 			},
 			expectedStatus: http.StatusOK,
@@ -779,7 +777,7 @@ func TestTransactionHandler_GetTransactionStatistics(t *testing.T) {
 		{
 			name: "repo error",
 			url:  "/transactions/statistics",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().GetTransactionStatistics(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, &domain.Error{Type: domain.InternalServerError, Message: "db error"})
 			},
 			expectedStatus: http.StatusInternalServerError,
@@ -787,7 +785,7 @@ func TestTransactionHandler_GetTransactionStatistics(t *testing.T) {
 		{
 			name: "valid range",
 			url:  "/transactions/statistics?startDate=2024-01-01&endDate=2024-01-31",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 				txRepo.EXPECT().GetTransactionStatistics(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]domain.TransactionStatistic{{Date: "2024-01", Total: 10000}}, nil)
 			},
 			expectedStatus: http.StatusOK,
@@ -795,21 +793,21 @@ func TestTransactionHandler_GetTransactionStatistics(t *testing.T) {
 		{
 			name: "malformed startDate",
 			url:  "/transactions/statistics?startDate=not-a-date",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 			},
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
 			name: "malformed endDate",
 			url:  "/transactions/statistics?endDate=not-a-date",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 			},
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
 			name: "startDate after endDate",
 			url:  "/transactions/statistics?startDate=2024-02-01&endDate=2024-01-01",
-			setupMocks: func(txRepo *mock.MockTransactionRepository, variantRepo *mock.MockVariantRepository, couponRepo *mock.MockCouponRepository, walletRepo *mock.MockWalletRepository) {
+			setupMocks: func(txRepo *mock.MockTransactionRepoPort, variantRepo *mock.MockVariantRepoPort, couponRepo *mock.MockCouponRepoPort, walletRepo *mock.MockWalletRepoPort) {
 			},
 			expectedStatus: http.StatusBadRequest,
 		},

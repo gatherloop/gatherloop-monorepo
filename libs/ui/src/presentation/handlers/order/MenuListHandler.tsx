@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect } from 'react';
 import { match, P } from 'ts-pattern';
 import { useRouter } from 'solito/router';
 import { Category } from '../../../domain/entities/Category';
@@ -22,7 +22,6 @@ import { CartBar } from '../../views/components/cart/CartBar';
 import { PendingPaymentBar } from '../../views/components/cart/PendingPaymentBar';
 import { useUsecase } from '../hooks/useUsecase';
 import { useCart } from '../hooks/useCart';
-import { usePaymentCancelSyncedTo } from '../hooks/usePaymentCancelSyncedTo';
 import { useTableResolve } from '../hooks/useTableResolve';
 import { MenuItemDetailScreenProps } from '../../views/screens/order/MenuItemDetailScreen';
 import {
@@ -202,82 +201,35 @@ export const MenuListHandler = ({
   const menuItemDetail = useUsecase(menuItemDetailUsecase);
   const cart = useCart(cartUsecase);
   const router = useRouter();
-  const [validationErrorProductId, setValidationErrorProductId] = useState<
-    number | null
-  >(null);
 
   const currentCart = cart.state.cart;
   const pendingPayment = currentCart?.pendingPayment ?? null;
 
-  const paymentCancel = usePaymentCancelSyncedTo(
-    paymentCancelUsecase,
-    pendingPayment && {
-      reference: pendingPayment.partnerReferenceNo,
-      method: pendingPayment.method,
-    }
-  );
-  const handledCancelResultRef =
-    useRef<typeof paymentCancel.state.result>(null);
-  const isAddAfterCancelPendingRef = useRef(false);
+  const paymentCancel = useUsecase(paymentCancelUsecase);
 
   useEffect(() => {
-    if (
-      paymentCancel.state.type !== 'settled' ||
-      !paymentCancel.state.result ||
-      handledCancelResultRef.current === paymentCancel.state.result
-    ) {
+    if (paymentCancel.state.type !== 'settled' || !paymentCancel.state.result) {
       return;
     }
-    handledCancelResultRef.current = paymentCancel.state.result;
+    const { result } = paymentCancel.state;
+    paymentCancel.dispatch({ type: 'ACKNOWLEDGE' });
 
-    if (paymentCancel.state.result.status === 'paid') {
-      router.push(`/orders/${paymentCancel.state.result.reference}`);
-    } else {
-      isAddAfterCancelPendingRef.current = true;
-      cart.dispatch({ type: 'FETCH' });
-    }
-  }, [paymentCancel.state, router, cart.dispatch]);
-
-  useEffect(() => {
-    if (!isAddAfterCancelPendingRef.current || cart.state.type !== 'loaded') {
+    if (result.status === 'paid') {
+      router.push(`/orders/${result.reference}`);
       return;
     }
 
-    isAddAfterCancelPendingRef.current = false;
     const { variant, amount, note } = menuItemDetail.state;
     if (variant) {
       cart.dispatch({ type: 'ADD_ITEM', variantId: variant.id, amount, note });
     }
-    menuList.dispatch({ type: 'CLEAR_ITEM' });
-  }, [cart.state.type, cart.dispatch, menuItemDetail.state, menuList.dispatch]);
-
-  useEffect(() => {
-    const { selectedProductId, selectedVariantId, query } = menuList.state;
-    if (selectedProductId !== null) {
-      const product = menuList.state.products.find(
-        (candidate) => candidate.id === selectedProductId
-      );
-      const variant = menuList.state.variants.find(
-        (candidate) => candidate.id === selectedVariantId
-      );
-      menuItemDetail.dispatch({
-        type: 'SELECT_PRODUCT',
-        productId: selectedProductId,
-        product,
-        preselectedOptionValueIds: product
-          ? computePreselectedOptionValueIds(query, product, variant)
-          : [],
-      });
-    }
-    // `menuList.state.products` is deliberately not a dependency: this
-    // effect's job is reacting to a *selection* changing, not to the menu
-    // list refetching. Depending on it too would re-dispatch SELECT_PRODUCT
-    // (and reset the draft's amount/note) whenever a background
-    // revalidation resolves while the sheet is open.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    menuItemDetail.dispatch({ type: 'CLEAR_PRODUCT' });
   }, [
-    menuList.state.selectedProductId,
-    menuList.state.selectedVariantId,
+    paymentCancel.state,
+    paymentCancel.dispatch,
+    router,
+    cart.dispatch,
+    menuItemDetail.state,
     menuItemDetail.dispatch,
   ]);
 
@@ -342,13 +294,25 @@ export const MenuListHandler = ({
     menuItemDetail.state.selectedOptionValueIds
   );
 
+  const selectItem = (product: Product, variant?: Variant) =>
+    menuItemDetail.dispatch({
+      type: 'SELECT_PRODUCT',
+      productId: product.id,
+      product,
+      preselectedOptionValueIds: computePreselectedOptionValueIds(
+        menuList.state.query,
+        product,
+        variant
+      ),
+    });
+
   const itemDetail: MenuListScreenProps['itemDetail'] =
-    menuList.state.selectedProductId === null
+    menuItemDetail.state.productId === null
       ? null
       : {
           isOpen: true,
           onOpenChange: (isOpen) => {
-            if (!isOpen) menuList.dispatch({ type: 'CLEAR_ITEM' });
+            if (!isOpen) menuItemDetail.dispatch({ type: 'CLEAR_PRODUCT' });
           },
           variant: toItemDetailScreenVariant(menuItemDetail.state),
           selectedOptionValueIds: menuItemDetail.state.selectedOptionValueIds,
@@ -371,13 +335,12 @@ export const MenuListHandler = ({
             menuItemDetail.dispatch({ type: 'CHANGE_NOTE', note }),
           ctaState: toCtaState(menuItemDetail.state),
           missingOptionNames,
-          validationMessage:
-            validationErrorProductId === menuItemDetail.state.productId
-              ? buildValidationMessage(missingOptionNames)
-              : null,
+          validationMessage: menuItemDetail.state.isValidationVisible
+            ? buildValidationMessage(missingOptionNames)
+            : null,
           onAddToCartPress: () => {
             if (missingOptionNames.length > 0) {
-              setValidationErrorProductId(menuItemDetail.state.productId);
+              menuItemDetail.dispatch({ type: 'SHOW_VALIDATION' });
               return;
             }
             const { variant, amount, note } = menuItemDetail.state;
@@ -388,7 +351,7 @@ export const MenuListHandler = ({
               amount,
               note,
             });
-            menuList.dispatch({ type: 'CLEAR_ITEM' });
+            menuItemDetail.dispatch({ type: 'CLEAR_PRODUCT' });
           },
           onRetryButtonPress: () => menuItemDetail.dispatch({ type: 'FETCH' }),
           lockedNotice: pendingPayment
@@ -399,7 +362,11 @@ export const MenuListHandler = ({
                   ? {
                       label: 'Batalkan & tambah item',
                       onPress: () =>
-                        paymentCancel.dispatch({ type: 'REQUEST' }),
+                        paymentCancel.dispatch({
+                          type: 'REQUEST',
+                          reference: pendingPayment.partnerReferenceNo,
+                          method: pendingPayment.method,
+                        }),
                     }
                   : null,
               }
@@ -410,7 +377,11 @@ export const MenuListHandler = ({
     isOpen:
       paymentCancel.state.type === 'confirming' ||
       paymentCancel.state.type === 'cancelling',
-    method: paymentCancel.state.method,
+    method:
+      paymentCancel.state.type === 'confirming' ||
+      paymentCancel.state.type === 'cancelling'
+        ? paymentCancel.state.method
+        : pendingPayment?.method ?? 'qris',
     isCancelling: paymentCancel.state.type === 'cancelling',
     onConfirm: () => paymentCancel.dispatch({ type: 'CONFIRM' }),
     onDismiss: () => paymentCancel.dispatch({ type: 'DISMISS' }),
@@ -472,16 +443,13 @@ export const MenuListHandler = ({
         })
       }
       onRetryButtonPress={() => menuList.dispatch({ type: 'FETCH' })}
-      onItemPress={(product: Product) =>
-        menuList.dispatch({ type: 'SELECT_ITEM', productId: product.id })
-      }
+      onItemPress={(product: Product) => selectItem(product)}
       highlightSections={highlightSections}
       onHighlightEntryPress={(entry: TagHighlightEntry) =>
-        menuList.dispatch({
-          type: 'SELECT_ITEM',
-          productId: entry.product.id,
-          variantId: entry.kind === 'variant' ? entry.variant.id : undefined,
-        })
+        selectItem(
+          entry.product,
+          entry.kind === 'variant' ? entry.variant : undefined
+        )
       }
       startingPriceByProductId={startingPriceByProductId}
       matchedLabelsByProductId={matchedLabelsByProductId}

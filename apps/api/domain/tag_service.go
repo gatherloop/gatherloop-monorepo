@@ -7,12 +7,12 @@ import (
 )
 
 type TagService struct {
-	tagRepository TagRepository
+	tagRepoPort TagRepoPort
 }
 
-func NewTagService(tagRepository TagRepository) TagService {
+func NewTagService(tagRepoPort TagRepoPort) TagService {
 	return TagService{
-		tagRepository: tagRepository,
+		tagRepoPort: tagRepoPort,
 	}
 }
 
@@ -26,7 +26,7 @@ func (service TagService) ValidateTag(ctx context.Context, tag Tag, excludeId *i
 		return &Error{Type: BadRequest, Message: "tag color is not supported"}
 	}
 
-	tags, err := service.tagRepository.GetTagList(ctx)
+	tags, err := service.tagRepoPort.GetTagList(ctx)
 	if err != nil {
 		return err
 	}
@@ -38,4 +38,40 @@ func (service TagService) ValidateTag(ctx context.Context, tag Tag, excludeId *i
 	}
 
 	return nil
+}
+
+func (service TagService) ApplyVariantTagPairs(ctx context.Context, existing []VariantTagPair, desired []VariantTagPair) *Error {
+	toInsert, toDelete := service.diffVariantTagPairs(existing, desired)
+
+	if len(toDelete) > 0 {
+		if err := service.tagRepoPort.DeleteVariantTags(ctx, toDelete); err != nil {
+			return err
+		}
+	}
+	if len(toInsert) > 0 {
+		if err := service.tagRepoPort.InsertVariantTags(ctx, toInsert); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (service TagService) diffVariantTagPairs(existing []VariantTagPair, desired []VariantTagPair) (toInsert []VariantTagPair, toDelete []VariantTagPair) {
+	existingSet := map[VariantTagPair]bool{}
+	for _, pair := range existing {
+		existingSet[pair] = true
+	}
+	desiredSet := map[VariantTagPair]bool{}
+	for _, pair := range desired {
+		desiredSet[pair] = true
+		if !existingSet[pair] {
+			toInsert = append(toInsert, pair)
+		}
+	}
+	for _, pair := range existing {
+		if !desiredSet[pair] {
+			toDelete = append(toDelete, pair)
+		}
+	}
+	return toInsert, toDelete
 }

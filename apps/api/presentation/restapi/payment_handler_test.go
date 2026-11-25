@@ -27,36 +27,35 @@ const paymentHandlerOrderPaymentWalletId = 9
 var fakeJpegBytes = []byte{0xFF, 0xD8, 0xFF, 0, 0, 0}
 
 type paymentHandlerMocks struct {
-	paymentRepo               *mock.MockPaymentRepository
-	gatewayRepo               *mock.MockPaymentGatewayRepository
-	customerRepo              *mock.MockCustomerRepository
-	cartRepo                  *mock.MockCartRepository
-	transactionRepo           *mock.MockTransactionRepository
-	variantRepo               *mock.MockVariantRepository
-	walletRepo                *mock.MockWalletRepository
-	availabilityRepo          *mock.MockAvailabilityRepository
-	kdsNotificationRepo       *mock.MockKdsNotificationRepository
-	kdsNotificationDispatcher *mock.MockKdsNotificationDispatcher
-	paymentVerificationRepo   *mock.MockPaymentVerificationRepository
+	paymentRepo               *mock.MockPaymentRepoPort
+	gatewayRepo               *mock.MockPaymentGatewayPort
+	customerRepo              *mock.MockCustomerRepoPort
+	cartRepo                  *mock.MockCartRepoPort
+	transactionRepo           *mock.MockTransactionRepoPort
+	variantRepo               *mock.MockVariantRepoPort
+	walletRepo                *mock.MockWalletRepoPort
+	availabilityRepo          *mock.MockAvailabilityRepoPort
+	kdsNotificationRepo       *mock.MockKdsNotificationRepoPort
+	kdsNotificationDispatcher domain.KdsNotificationService
+	paymentVerificationRepo   *mock.MockPaymentVerificationRepoPort
 }
 
 func newPaymentHandlerMocks(ctrl *gomock.Controller) paymentHandlerMocks {
-	kdsNotificationRepo := mock.NewMockKdsNotificationRepository(ctrl)
+	kdsNotificationRepo := mock.NewMockKdsNotificationRepoPort(ctrl)
 	kdsNotificationRepo.EXPECT().EnqueueForTransaction(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	kdsNotificationRepo.EXPECT().HasNotificationForTransaction(gomock.Any(), gomock.Any(), gomock.Any()).Return(true, nil).AnyTimes()
-	kdsNotificationDispatcher := mock.NewMockKdsNotificationDispatcher(ctrl)
-	kdsNotificationDispatcher.EXPECT().TriggerDispatch().AnyTimes()
-	paymentVerificationRepo := mock.NewMockPaymentVerificationRepository(ctrl)
+	kdsNotificationDispatcher := permissiveKdsNotificationService(ctrl)
+	paymentVerificationRepo := mock.NewMockPaymentVerificationRepoPort(ctrl)
 	paymentVerificationRepo.EXPECT().DeleteByPaymentId(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	return paymentHandlerMocks{
-		paymentRepo:               mock.NewMockPaymentRepository(ctrl),
-		gatewayRepo:               mock.NewMockPaymentGatewayRepository(ctrl),
-		customerRepo:              mock.NewMockCustomerRepository(ctrl),
-		cartRepo:                  mock.NewMockCartRepository(ctrl),
-		transactionRepo:           mock.NewMockTransactionRepository(ctrl),
-		variantRepo:               mock.NewMockVariantRepository(ctrl),
-		walletRepo:                mock.NewMockWalletRepository(ctrl),
-		availabilityRepo:          mock.NewMockAvailabilityRepository(ctrl),
+		paymentRepo:               mock.NewMockPaymentRepoPort(ctrl),
+		gatewayRepo:               mock.NewMockPaymentGatewayPort(ctrl),
+		customerRepo:              mock.NewMockCustomerRepoPort(ctrl),
+		cartRepo:                  mock.NewMockCartRepoPort(ctrl),
+		transactionRepo:           mock.NewMockTransactionRepoPort(ctrl),
+		variantRepo:               mock.NewMockVariantRepoPort(ctrl),
+		walletRepo:                mock.NewMockWalletRepoPort(ctrl),
+		availabilityRepo:          mock.NewMockAvailabilityRepoPort(ctrl),
 		kdsNotificationRepo:       kdsNotificationRepo,
 		kdsNotificationDispatcher: kdsNotificationDispatcher,
 		paymentVerificationRepo:   paymentVerificationRepo,
@@ -64,23 +63,9 @@ func newPaymentHandlerMocks(ctrl *gomock.Controller) paymentHandlerMocks {
 }
 
 func (m paymentHandlerMocks) handler() restapi.PaymentHandler {
-	return m.handlerWithCancelEnabled(false)
-}
-
-func (m paymentHandlerMocks) handlerWithCancelEnabled(orderPaymentCancelEnabled bool) restapi.PaymentHandler {
-	return m.handlerWithCancelAndCodEnabled(orderPaymentCancelEnabled, false)
-}
-
-// handlerWithCodEnabled builds the handler with ORDER_COD_PAYMENT_ENABLED on, for Checkout's cod
-// branch tests (FR-2/D12).
-func (m paymentHandlerMocks) handlerWithCodEnabled() restapi.PaymentHandler {
-	return m.handlerWithCancelAndCodEnabled(false, true)
-}
-
-func (m paymentHandlerMocks) handlerWithCancelAndCodEnabled(orderPaymentCancelEnabled bool, orderCodPaymentEnabled bool) restapi.PaymentHandler {
 	availabilityService := domain.NewAvailabilityService(nil, nil, m.availabilityRepo)
-	paymentService := domain.NewPaymentService(m.transactionRepo, m.paymentRepo, m.paymentVerificationRepo, m.gatewayRepo, m.cartRepo, m.walletRepo, m.kdsNotificationRepo, availabilityService, paymentHandlerOrderPaymentWalletId, orderPaymentCancelEnabled, m.kdsNotificationDispatcher)
-	usecase := domain.NewPaymentUsecase(m.paymentRepo, m.gatewayRepo, m.customerRepo, m.cartRepo, m.transactionRepo, m.variantRepo, m.walletRepo, m.kdsNotificationRepo, m.paymentVerificationRepo, paymentService, availabilityService, m.kdsNotificationDispatcher, domain.NoopWhatsappNumberVerifier{}, 300, 600, 900, paymentHandlerOrderPaymentWalletId, orderPaymentCancelEnabled, orderCodPaymentEnabled)
+	paymentService := domain.NewPaymentService(m.transactionRepo, m.paymentRepo, m.paymentVerificationRepo, m.gatewayRepo, m.cartRepo, m.walletRepo, m.kdsNotificationRepo, availabilityService, m.kdsNotificationDispatcher, paymentHandlerOrderPaymentWalletId)
+	usecase := domain.NewPaymentUsecase(m.paymentRepo, m.gatewayRepo, m.customerRepo, m.cartRepo, m.transactionRepo, m.variantRepo, m.walletRepo, m.kdsNotificationRepo, m.paymentVerificationRepo, paymentService, availabilityService, domain.WhatsappNumberVerificationService{}, m.kdsNotificationDispatcher, 300, 600, 900, paymentHandlerOrderPaymentWalletId)
 	return restapi.NewPaymentHandler(usecase)
 }
 
@@ -96,7 +81,7 @@ func expectValidPaymentWallet(m paymentHandlerMocks) {
 		Return(domain.Wallet{Id: paymentHandlerOrderPaymentWalletId, Name: "QRIS", IsPaymentTarget: true}, nil)
 }
 
-func withPaymentHandlerTransactionMock(r *mock.MockPaymentRepository) {
+func withPaymentHandlerTransactionMock(r *mock.MockPaymentRepoPort) {
 	r.EXPECT().BeginTransaction(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, cb func(context.Context) *domain.Error) *domain.Error { return cb(ctx) })
 }
@@ -304,28 +289,7 @@ func TestPaymentHandler_Checkout(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 
-	t.Run("cod with a verificationPhoto is a 400 while ORDER_COD_PAYMENT_ENABLED is off, with no wallet or cart lookup", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		m := newPaymentHandlerMocks(ctrl)
-
-		method := "cod"
-		photo := "ZmFrZS1qcGVn"
-		body, _ := json.Marshal(apiContract.PaymentCheckoutRequest{CustomerName: "Budi", Method: &method, VerificationPhoto: &photo})
-		req := httptest.NewRequest(http.MethodPost, "/carts/current/checkout", bytes.NewBuffer(body))
-		req.Header.Set("X-Session-Id", testSessionId)
-		w := httptest.NewRecorder()
-		m.handler().Checkout(w, req)
-
-		assert.Equal(t, http.StatusBadRequest, w.Code)
-
-		var apiErr apiContract.Error
-		assert.NoError(t, json.NewDecoder(bytes.NewBufferString(w.Body.String())).Decode(&apiErr))
-		assert.Equal(t, "payment method is not available", apiErr.Message)
-	})
-
-	t.Run("a cod checkout succeeds without ever calling the gateway, once the flag is on", func(t *testing.T) {
+	t.Run("a cod checkout succeeds without ever calling the gateway", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -367,7 +331,7 @@ func TestPaymentHandler_Checkout(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/carts/current/checkout", bytes.NewBuffer(body))
 		req.Header.Set("X-Session-Id", testSessionId)
 		w := httptest.NewRecorder()
-		m.handlerWithCodEnabled().Checkout(w, req)
+		m.handler().Checkout(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
 
@@ -717,7 +681,7 @@ func TestPaymentHandler_GetPaymentByPartnerReferenceNo(t *testing.T) {
 }
 
 func TestPaymentHandler_GetPaymentByPartnerReferenceNo_CanCancel(t *testing.T) {
-	t.Run("true for the owning session when the flag is on", func(t *testing.T) {
+	t.Run("true for the owning session", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -738,14 +702,14 @@ func TestPaymentHandler_GetPaymentByPartnerReferenceNo_CanCancel(t *testing.T) {
 		req.Header.Set("X-Session-Id", testSessionId)
 		req = mux.SetURLVars(req, map[string]string{"partnerReferenceNo": payment.PartnerReferenceNo})
 		w := httptest.NewRecorder()
-		m.handlerWithCancelEnabled(true).GetPaymentByPartnerReferenceNo(w, req)
+		m.handler().GetPaymentByPartnerReferenceNo(w, req)
 
 		var resp apiContract.PaymentResponse
 		assert.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
 		assert.True(t, resp.Data.CanCancel)
 	})
 
-	t.Run("false for an access-key reader even when the flag is on", func(t *testing.T) {
+	t.Run("false for an access-key reader even", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -768,7 +732,7 @@ func TestPaymentHandler_GetPaymentByPartnerReferenceNo_CanCancel(t *testing.T) {
 		req.Header.Set("X-Order-Access-Key", accessKey)
 		req = mux.SetURLVars(req, map[string]string{"partnerReferenceNo": payment.PartnerReferenceNo})
 		w := httptest.NewRecorder()
-		m.handlerWithCancelEnabled(true).GetPaymentByPartnerReferenceNo(w, req)
+		m.handler().GetPaymentByPartnerReferenceNo(w, req)
 
 		var resp apiContract.PaymentResponse
 		assert.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
@@ -787,21 +751,6 @@ func cancelPendingPaymentFixture() domain.Payment {
 }
 
 func TestPaymentHandler_Cancel(t *testing.T) {
-	t.Run("the flag off is a 400, with no repository access at all", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		m := newPaymentHandlerMocks(ctrl)
-
-		req := httptest.NewRequest(http.MethodPost, "/payments/ORD1234567890AB/cancel", nil)
-		req.Header.Set("X-Session-Id", testSessionId)
-		req = mux.SetURLVars(req, map[string]string{"partnerReferenceNo": "ORD1234567890AB"})
-		w := httptest.NewRecorder()
-		m.handler().Cancel(w, req)
-
-		assert.Equal(t, http.StatusBadRequest, w.Code)
-	})
-
 	t.Run("an unknown reference is 404", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -815,7 +764,7 @@ func TestPaymentHandler_Cancel(t *testing.T) {
 		req.Header.Set("X-Session-Id", testSessionId)
 		req = mux.SetURLVars(req, map[string]string{"partnerReferenceNo": "ORDUNKNOWN000AB"})
 		w := httptest.NewRecorder()
-		m.handlerWithCancelEnabled(true).Cancel(w, req)
+		m.handler().Cancel(w, req)
 
 		assert.Equal(t, http.StatusNotFound, w.Code)
 	})
@@ -838,7 +787,7 @@ func TestPaymentHandler_Cancel(t *testing.T) {
 		req.Header.Set("X-Order-Access-Key", accessKey)
 		req = mux.SetURLVars(req, map[string]string{"partnerReferenceNo": payment.PartnerReferenceNo})
 		w := httptest.NewRecorder()
-		m.handlerWithCancelEnabled(true).Cancel(w, req)
+		m.handler().Cancel(w, req)
 
 		assert.Equal(t, http.StatusNotFound, w.Code)
 	})
@@ -867,7 +816,7 @@ func TestPaymentHandler_Cancel(t *testing.T) {
 		req.Header.Set("X-Session-Id", testSessionId)
 		req = mux.SetURLVars(req, map[string]string{"partnerReferenceNo": payment.PartnerReferenceNo})
 		w := httptest.NewRecorder()
-		m.handlerWithCancelEnabled(true).Cancel(w, req)
+		m.handler().Cancel(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
 		var resp apiContract.PaymentResponse
@@ -900,7 +849,7 @@ func TestPaymentHandler_Cancel(t *testing.T) {
 		req.Header.Set("X-Session-Id", testSessionId)
 		req = mux.SetURLVars(req, map[string]string{"partnerReferenceNo": payment.PartnerReferenceNo})
 		w := httptest.NewRecorder()
-		m.handlerWithCancelEnabled(true).Cancel(w, req)
+		m.handler().Cancel(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
 		var resp apiContract.PaymentResponse
@@ -945,7 +894,7 @@ func TestPaymentHandler_Cancel(t *testing.T) {
 		req.Header.Set("X-Session-Id", testSessionId)
 		req = mux.SetURLVars(req, map[string]string{"partnerReferenceNo": payment.PartnerReferenceNo})
 		w := httptest.NewRecorder()
-		m.handlerWithCancelEnabled(true).Cancel(w, req)
+		m.handler().Cancel(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
 		var resp apiContract.PaymentResponse
@@ -978,7 +927,7 @@ func TestPaymentHandler_Cancel(t *testing.T) {
 		req.Header.Set("X-Session-Id", testSessionId)
 		req = mux.SetURLVars(req, map[string]string{"partnerReferenceNo": payment.PartnerReferenceNo})
 		w := httptest.NewRecorder()
-		m.handlerWithCancelEnabled(true).Cancel(w, req)
+		m.handler().Cancel(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
 		var resp apiContract.PaymentResponse
@@ -1002,7 +951,7 @@ func TestPaymentHandler_Cancel(t *testing.T) {
 		req.Header.Set("X-Session-Id", testSessionId)
 		req = mux.SetURLVars(req, map[string]string{"partnerReferenceNo": payment.PartnerReferenceNo})
 		w := httptest.NewRecorder()
-		m.handlerWithCancelEnabled(true).Cancel(w, req)
+		m.handler().Cancel(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
 		var resp apiContract.PaymentResponse
@@ -1018,7 +967,7 @@ func TestPaymentCancelRoute_RequiresSessionId(t *testing.T) {
 	m := newPaymentHandlerMocks(ctrl)
 
 	router := mux.NewRouter()
-	restapi.NewPaymentRouter(m.handlerWithCancelEnabled(true)).AddRouter(router)
+	restapi.NewPaymentRouter(m.handler()).AddRouter(router)
 
 	req := httptest.NewRequest(http.MethodPost, "/payments/ORD1234567890AB/cancel", nil)
 	w := httptest.NewRecorder()

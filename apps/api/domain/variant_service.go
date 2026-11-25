@@ -1,19 +1,24 @@
 package domain
 
-import "context"
+import (
+	"apps/api/utils"
+	"context"
+)
 
 type VariantService struct {
-	tagRepository TagRepository
+	tagRepoPort TagRepoPort
+	tagService  TagService
 }
 
-func NewVariantService(tagRepository TagRepository) VariantService {
+func NewVariantService(tagRepoPort TagRepoPort, tagService TagService) VariantService {
 	return VariantService{
-		tagRepository: tagRepository,
+		tagRepoPort: tagRepoPort,
+		tagService:  tagService,
 	}
 }
 
 func (service VariantService) ValidateTagIds(ctx context.Context, tagIds []int64) *Error {
-	tags, err := service.tagRepository.GetTagList(ctx)
+	tags, err := service.tagRepoPort.GetTagList(ctx)
 	if err != nil {
 		return err
 	}
@@ -30,20 +35,20 @@ func (service VariantService) ValidateTagIds(ctx context.Context, tagIds []int64
 }
 
 func (service VariantService) ReplaceVariantTags(ctx context.Context, variantId int64, tagIds []int64) *Error {
-	existingTagIds, err := service.tagRepository.GetVariantTagIds(ctx, variantId)
+	existingTagIds, err := service.tagRepoPort.GetVariantTagIds(ctx, variantId)
 	if err != nil {
 		return err
 	}
 
 	toVariantPairs := func(ids []int64) []VariantTagPair {
 		pairs := []VariantTagPair{}
-		for _, tagId := range uniqueInt64s(ids) {
+		for _, tagId := range utils.UniqueInt64s(ids) {
 			pairs = append(pairs, VariantTagPair{VariantId: variantId, TagId: tagId})
 		}
 		return pairs
 	}
 
-	return applyVariantTagPairs(ctx, service.tagRepository, toVariantPairs(existingTagIds), toVariantPairs(tagIds))
+	return service.tagService.ApplyVariantTagPairs(ctx, toVariantPairs(existingTagIds), toVariantPairs(tagIds))
 }
 
 func (service VariantService) ValidateVariantForSaleType(saleType SaleType, variant *Variant) *Error {
